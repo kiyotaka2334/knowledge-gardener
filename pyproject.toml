@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "knowledge-gardener"
+version = "0.2.0"
+description = "AI-powered Obsidian knowledge management system — content-aware knowledge graph"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "python-frontmatter>=1.1.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.4",
+]
+
+[project.scripts]
+knowledge-gardener = "knowledge_gardener.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
