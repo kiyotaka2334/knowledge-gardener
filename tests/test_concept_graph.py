@@ -6,7 +6,7 @@ import pytest
 
 from knowledge_gardener.concept_extractor import extract_concepts
 from knowledge_gardener.concept_graph import build_concept_graph
-from knowledge_gardener.models import Concept, ConceptEdge, ConceptGraph, ConceptIndex
+from knowledge_gardener.models import Concept, ConceptEdge, ConceptGraph, ConceptIndex, Note, VaultModel
 from knowledge_gardener.vault_reader import read_vault
 
 FIXTURE_VAULT = Path(__file__).parent / "fixtures" / "sample_vault"
@@ -53,6 +53,33 @@ def _make_index(
         concepts=concepts,
         note_concepts=sorted_nc,
     )
+
+
+def _make_vault_with_links(
+    note_specs: dict[str, tuple[str, list[str]]],
+) -> VaultModel:
+    """Build a minimal VaultModel for wikilink tests.
+
+    note_specs maps note_id → (title, list_of_outlink_note_ids).
+    All referenced outlink IDs must exist as keys in note_specs.
+    """
+    vault = VaultModel(root="/fake")
+    ts = "2024-01-01T00:00:00+00:00"
+    for note_id, (title, outlinks) in note_specs.items():
+        vault.notes[note_id] = Note(
+            id=note_id,
+            path=f"{note_id}.md",
+            title=title,
+            content="",
+            outlinks=outlinks,
+            backlinks=[],
+            broken_links=[],
+            folder="",
+            word_count=0,
+            created=ts,
+            modified=ts,
+        )
+    return vault
 
 
 def _edge_key(g: ConceptGraph, a: str, b: str) -> tuple[str, str]:
@@ -152,16 +179,16 @@ class TestStructure:
 class TestWeights:
     def test_weight_formula(self):
         # A: sources = [n1, n2], B: sources = [n1, n2]
-        # count=2, sa=2, sb=2 → weight = 2/(2+2-2) = 1.0
+        # count=2, sa=2, sb=2 → co_occurrence_weight = 2/(2+2-2) = 1.0
         index = _make_index({"n1": ["a", "b"], "n2": ["a", "b"]})
         g = build_concept_graph(index)
-        assert g.edges[0].weight == 1.0
+        assert g.edges[0].co_occurrence_weight == 1.0
 
     def test_weight_one_when_always_together(self):
         # A and B appear in exactly the same two notes and nowhere else
         index = _make_index({"n1": ["a", "b"], "n2": ["a", "b"]})
         g = build_concept_graph(index)
-        assert g.edges[0].weight == 1.0
+        assert g.edges[0].co_occurrence_weight == 1.0
 
     def test_weight_partial_overlap(self):
         # A: [n1, n2], B: [n1, n3] → count=1, sa=2, sb=2 → 1/(2+2-1)=1/3
@@ -174,9 +201,9 @@ class TestWeights:
         e = g.get_edge("a", "b")
         assert e is not None
         expected = round(1 / (2 + 2 - 1), 6)
-        assert e.weight == expected
+        assert e.co_occurrence_weight == expected
 
-    def test_weight_bounded_between_zero_and_one(self):
+    def test_cooc_weight_bounded_between_zero_and_one(self):
         index = _make_index({
             "n1": ["a", "b", "c"],
             "n2": ["a", "c"],
@@ -185,7 +212,7 @@ class TestWeights:
         })
         g = build_concept_graph(index)
         for e in g.edges:
-            assert 0 < e.weight <= 1.0
+            assert 0 < e.co_occurrence_weight <= 1.0
 
     def test_weight_decreases_with_larger_source_sets(self):
         # Same count=1, but different source set sizes
@@ -207,7 +234,17 @@ class TestWeights:
         e_ab = g.get_edge("a", "b")
         e_cd = g.get_edge("c", "d")
         assert e_ab is not None and e_cd is not None
-        assert e_ab.weight > e_cd.weight
+        assert e_ab.co_occurrence_weight > e_cd.co_occurrence_weight
+
+    def test_wikilink_only_edge_has_zero_cooc_weight(self):
+        # Edge created solely by wikilinks has co_occurrence_weight=0.0
+        index = _make_index({"n1": ["a"], "n2": ["b"]})
+        vault = _make_vault_with_links({"n1": ("a", ["n2"]), "n2": ("b", [])})
+        g = build_concept_graph(index, vault=vault)
+        e = g.get_edge("a", "b")
+        assert e is not None
+        assert e.co_occurrence_weight == 0.0
+        assert e.wikilink_count == 1
 
 
 # ---------------------------------------------------------------------------
@@ -344,23 +381,113 @@ class TestSerialization:
         assert "source" in e
         assert "target" in e
         assert "co_occurrence_count" in e
-        assert "weight" in e
+        assert "co_occurrence_weight" in e
         assert "shared_notes" in e
+        assert "wikilink_count" in e
+        assert "wikilink_notes" in e
 
-    def test_edges_sorted_by_weight_desc(self):
+    def test_edges_sorted_wikilink_first_then_cooc(self):
+        # Wikilink edge should sort before co-occurrence-only edge
+        index = _make_index({"n1": ["a", "b"], "n2": ["a", "c"]})
+        vault = _make_vault_with_links({"n1": ("a", ["n2"]), "n2": ("b", []), "n3": ("c", [])})
+        g = build_concept_graph(index, vault=vault)
+        # a-b: wikilink_count=1, a-c: wikilink_count=0 (co-occurrence from n2)
+        assert g.edges[0].wikilink_count >= g.edges[-1].wikilink_count
+
+    def test_cooc_only_edges_sorted_by_cooc_weight_desc(self):
+        # Without vault, sort falls back to co_occurrence_weight desc
         index = _make_index({
             "n1": ["a", "b"],
             "n2": ["a", "b"],
             "n3": ["a", "c"],
         })
         edges = build_concept_graph(index).to_dict()["edges"]
-        weights = [e["weight"] for e in edges]
+        weights = [e["co_occurrence_weight"] for e in edges]
         assert weights == sorted(weights, reverse=True)
 
     def test_empty_graph_density_is_zero(self):
         index = ConceptIndex(vault_root="/fake")
         d = build_concept_graph(index).to_dict()
         assert d["stats"]["density"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Wikilink signal
+# ---------------------------------------------------------------------------
+
+
+class TestWikilinks:
+    def test_no_vault_produces_no_wikilink_edges(self):
+        index = _make_index({"n1": ["a"], "n2": ["b"]})
+        g = build_concept_graph(index)
+        assert g.edges == []
+
+    def test_wikilink_creates_edge_between_isolated_concepts(self):
+        # a and b are in different notes (no co-occurrence) but linked
+        index = _make_index({"n1": ["a"], "n2": ["b"]})
+        vault = _make_vault_with_links({"n1": ("a", ["n2"]), "n2": ("b", [])})
+        g = build_concept_graph(index, vault=vault)
+        e = g.get_edge("a", "b")
+        assert e is not None
+        assert e.wikilink_count == 1
+        assert e.co_occurrence_count == 0
+
+    def test_mutual_wikilink_count_is_two(self):
+        index = _make_index({"n1": ["a"], "n2": ["b"]})
+        vault = _make_vault_with_links({"n1": ("a", ["n2"]), "n2": ("b", ["n1"])})
+        g = build_concept_graph(index, vault=vault)
+        e = g.get_edge("a", "b")
+        assert e is not None
+        assert e.wikilink_count == 2
+        assert sorted(e.wikilink_notes) == ["n1", "n2"]
+
+    def test_wikilink_and_cooc_merge_into_one_edge(self):
+        # a and b co-occur in n1 AND a's note links to b's note
+        index = _make_index({"n1": ["a", "b"]})
+        vault = _make_vault_with_links({"n1": ("a", ["n2"]), "n2": ("b", [])})
+        g = build_concept_graph(index, vault=vault)
+        assert len(g.edges) == 1
+        e = g.edges[0]
+        assert e.co_occurrence_count == 1
+        assert e.wikilink_count == 1
+
+    def test_self_link_ignored(self):
+        # a note linking to itself produces no edge
+        index = _make_index({"n1": ["a"]})
+        vault = _make_vault_with_links({"n1": ("a", ["n1"])})
+        g = build_concept_graph(index, vault=vault)
+        assert g.edges == []
+
+    def test_link_to_unknown_concept_ignored(self):
+        # target note exists in vault but has no concept in index
+        index = _make_index({"n1": ["a"]})
+        vault = _make_vault_with_links({"n1": ("a", ["n2"]), "n2": ("scratch", [])})
+        g = build_concept_graph(index, vault=vault)
+        assert g.edges == []
+
+    def test_wikilink_canonical_edge_order(self):
+        # b → a wikilink should still produce edge with source < target
+        index = _make_index({"n1": ["a"], "n2": ["b"]})
+        vault = _make_vault_with_links({"n1": ("a", []), "n2": ("b", ["n1"])})
+        g = build_concept_graph(index, vault=vault)
+        e = g.get_edge("a", "b")
+        assert e is not None
+        assert e.source == "a"
+        assert e.target == "b"
+
+    def test_wikilink_count_zero_when_no_vault(self):
+        index = _make_index({"n1": ["a", "b"]})
+        g = build_concept_graph(index)
+        assert g.edges[0].wikilink_count == 0
+        assert g.edges[0].wikilink_notes == []
+
+    def test_wikilink_nodes_still_present_without_cooc(self):
+        # Isolated concepts connected only by wikilinks appear as nodes
+        index = _make_index({"n1": ["a"], "n2": ["b"]})
+        vault = _make_vault_with_links({"n1": ("a", ["n2"]), "n2": ("b", [])})
+        g = build_concept_graph(index, vault=vault)
+        assert "a" in g.nodes
+        assert "b" in g.nodes
 
 
 # ---------------------------------------------------------------------------
@@ -414,17 +541,29 @@ class TestFixtureVault:
             for name in scratch_concepts:
                 assert e.source != name and e.target != name
 
-    def test_all_edges_weight_in_valid_range(self):
+    def test_cooc_weight_valid_range_fixture(self):
         vault = read_vault(FIXTURE_VAULT)
         index = extract_concepts(vault)
-        g = build_concept_graph(index)
+        g = build_concept_graph(index, vault=vault)
         for e in g.edges:
-            assert 0 < e.weight <= 1.0
+            assert 0.0 <= e.co_occurrence_weight <= 1.0
+            assert e.wikilink_count >= 0
+
+    def test_deep_work_flow_state_wikilink_mutual(self):
+        # flow-state.md links to [[Deep Work]] and deep-work.md links to [[Flow State]]
+        vault = read_vault(FIXTURE_VAULT)
+        index = extract_concepts(vault)
+        g = build_concept_graph(index, vault=vault)
+        e = g.get_edge("deep work", "flow state")
+        assert e is not None
+        assert e.wikilink_count == 2
+        assert "learning/deep-work" in e.wikilink_notes
+        assert "psychology/flow-state" in e.wikilink_notes
 
     def test_neighbors_symmetric_fixture(self):
         vault = read_vault(FIXTURE_VAULT)
         index = extract_concepts(vault)
-        g = build_concept_graph(index)
+        g = build_concept_graph(index, vault=vault)
         for e in g.edges:
             assert e.target in g.neighbors(e.source)
             assert e.source in g.neighbors(e.target)
@@ -433,6 +572,5 @@ class TestFixtureVault:
         import json
         vault = read_vault(FIXTURE_VAULT)
         index = extract_concepts(vault)
-        g = build_concept_graph(index)
-        # Should not raise
+        g = build_concept_graph(index, vault=vault)
         json.dumps(g.to_dict())

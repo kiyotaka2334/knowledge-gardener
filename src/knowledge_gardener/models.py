@@ -179,13 +179,22 @@ class ConceptIndex:
 
 @dataclass
 class ConceptEdge:
-    """An undirected weighted edge between two co-occurring concepts."""
+    """An undirected weighted edge between two concepts.
 
-    source: str               # concept name — lexicographically smaller of the pair
-    target: str               # concept name — lexicographically larger of the pair
-    shared_notes: list[str]   # note IDs where both concepts appear (sorted)
-    co_occurrence_count: int  # len(shared_notes) — raw joint frequency
-    weight: float             # Jaccard similarity: count / (sa + sb - count)
+    Carries two independent relationship signals:
+    - Co-occurrence: concepts extracted from the same note (Jaccard weight).
+    - Wikilink: author-declared links between the concepts' primary notes.
+    Both are preserved separately so downstream consumers can weight them
+    independently rather than having the graph builder make that decision.
+    """
+
+    source: str                    # concept name — lexicographically smaller
+    target: str                    # concept name — lexicographically larger
+    shared_notes: list[str]        # note IDs where both concepts co-occur (sorted)
+    co_occurrence_count: int       # len(shared_notes)
+    co_occurrence_weight: float    # Jaccard: count / (sa + sb - count); 0.0 if no co-occurrence
+    wikilink_count: int            # directed wikilinks between the two concept notes (0–2)
+    wikilink_notes: list[str]      # note IDs that originate wikilinks for this pair (sorted)
 
 
 @dataclass
@@ -242,8 +251,10 @@ class ConceptGraph:
                     "source": e.source,
                     "target": e.target,
                     "co_occurrence_count": e.co_occurrence_count,
-                    "weight": e.weight,
+                    "co_occurrence_weight": e.co_occurrence_weight,
                     "shared_notes": e.shared_notes,
+                    "wikilink_count": e.wikilink_count,
+                    "wikilink_notes": e.wikilink_notes,
                 }
                 for e in self.edges
             ],
