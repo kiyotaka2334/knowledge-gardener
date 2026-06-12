@@ -104,7 +104,7 @@ def _make_note(**kwargs) -> Note:
 class TestExtractFromNote:
     def test_extracts_tags(self):
         note = _make_note(tags=["psychology", "focus"])
-        result = _extract_from_note(note)
+        result = _extract_from_note(note, max_heading_level=2)
         assert "psychology" in result
         assert "tag" in result["psychology"]
         assert "focus" in result
@@ -112,33 +112,43 @@ class TestExtractFromNote:
 
     def test_extracts_title(self):
         note = _make_note(title="Deep Work")
-        result = _extract_from_note(note)
+        result = _extract_from_note(note, max_heading_level=2)
         assert "deep work" in result
         assert "title" in result["deep work"]
 
     def test_extracts_headings(self):
         note = _make_note(headings=[{"level": 2, "text": "Agent Memory"}])
-        result = _extract_from_note(note)
+        result = _extract_from_note(note, max_heading_level=2)
         assert "agent memory" in result
         assert "heading" in result["agent memory"]
+
+    def test_heading_above_max_level_excluded(self):
+        note = _make_note(headings=[{"level": 3, "text": "Deep Detail"}])
+        result = _extract_from_note(note, max_heading_level=2)
+        assert "deep detail" not in result
+
+    def test_heading_at_max_level_included(self):
+        note = _make_note(headings=[{"level": 2, "text": "Section"}])
+        result = _extract_from_note(note, max_heading_level=2)
+        assert "section" in result
 
     def test_deduplicates_title_and_heading_within_note(self):
         note = _make_note(
             title="Flow State",
             headings=[{"level": 1, "text": "Flow State"}],
         )
-        result = _extract_from_note(note)
+        result = _extract_from_note(note, max_heading_level=2)
         assert "flow state" in result
         assert result["flow state"] == {"title", "heading"}
 
     def test_deduplicates_tag_and_title_within_note(self):
         note = _make_note(title="Psychology", tags=["psychology"])
-        result = _extract_from_note(note)
+        result = _extract_from_note(note, max_heading_level=2)
         assert result["psychology"] == {"tag", "title"}
 
     def test_empty_note_produces_only_title(self):
         note = _make_note(title="Solo", tags=[], headings=[])
-        result = _extract_from_note(note)
+        result = _extract_from_note(note, max_heading_level=2)
         assert list(result.keys()) == ["solo"]
 
 

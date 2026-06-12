@@ -10,6 +10,7 @@ from knowledge_gardener.models import Concept, ConceptIndex, VaultModel
 
 DEFAULT_STOPLIST: frozenset[str] = frozenset(
     {
+        # Generic file/folder names
         "scratch",
         "untitled",
         "notes",
@@ -18,8 +19,35 @@ DEFAULT_STOPLIST: frozenset[str] = frozenset(
         "index",
         "home",
         "inbox",
+        # Common note template headings
+        "example",
+        "example:",
+        "examples",
+        "why it matters",
+        "key idea",
+        "definition",
+        "related concepts",
+        "related",
+        "function",
+        "overview",
+        "summary",
+        "background",
+        "context",
+        "conclusion",
+        "introduction",
+        "why?",
+        "how?",
+        "what?",
+        "workflow",
+        "tasks",
+        "resources",
+        "references",
+        "next steps",
+        "takeaways",
     }
 )
+
+DEFAULT_MAX_HEADING_LEVEL: int = 2
 
 _MULTI_SPACE = re.compile(r"\s+")
 _PURE_DATE_OR_NUMBER = re.compile(r"^[\d\-./]+$")
@@ -57,13 +85,15 @@ def _is_valid(name: str, stoplist: frozenset[str]) -> bool:
     return True
 
 
-def _extract_from_note(note) -> dict[str, set[str]]:
+def _extract_from_note(note, max_heading_level: int) -> dict[str, set[str]]:
     """Collect normalized concept candidates from a single note.
 
     Returns a dict mapping normalized name → set of origin types
     ("tag", "title", "heading"). Within a single note, duplicate names
     from different sources are merged — the note contributes once to
     source_count but its frequency contribution equals len(origin_types).
+
+    Only headings at level <= max_heading_level are considered.
     """
     candidates: dict[str, set[str]] = {}
 
@@ -77,9 +107,10 @@ def _extract_from_note(note) -> dict[str, set[str]]:
         candidates.setdefault(title_name, set()).add("title")
 
     for heading in note.headings:
-        name = normalize(heading["text"])
-        if name:
-            candidates.setdefault(name, set()).add("heading")
+        if heading["level"] <= max_heading_level:
+            name = normalize(heading["text"])
+            if name:
+                candidates.setdefault(name, set()).add("heading")
 
     return candidates
 
@@ -87,6 +118,7 @@ def _extract_from_note(note) -> dict[str, set[str]]:
 def extract_concepts(
     vault: VaultModel,
     stoplist: Collection[str] | None = None,
+    max_heading_level: int = DEFAULT_MAX_HEADING_LEVEL,
 ) -> ConceptIndex:
     """Extract concepts from all notes in a VaultModel.
 
@@ -95,6 +127,10 @@ def extract_concepts(
         stoplist: Iterable of normalized concept names to suppress.
             Defaults to DEFAULT_STOPLIST. Pass an empty collection to
             disable filtering entirely.
+        max_heading_level: Only extract headings at this level or above
+            (lower number = higher in document). H1=1, H2=2, H3=3, etc.
+            Defaults to DEFAULT_MAX_HEADING_LEVEL (2). Set to 6 to include
+            all headings, or 1 to extract titles only.
 
     Returns:
         A ConceptIndex containing all extracted concepts and a
@@ -108,7 +144,7 @@ def extract_concepts(
     note_concepts: dict[str, list[str]] = {}
 
     for note in vault.notes.values():
-        raw = _extract_from_note(note)
+        raw = _extract_from_note(note, max_heading_level)
 
         note_names: list[str] = []
 
