@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 TOP_NOTES_LIMIT = 10
+TOP_CONCEPTS_LIMIT = 10
 
 
 @dataclass
@@ -159,6 +160,7 @@ class ConceptIndex:
             "version": self.version,
             "generated_at": self.generated_at,
             "vault_root": self.vault_root,
+            "stats": _concept_stats(self.concepts, TOP_CONCEPTS_LIMIT),
             "concepts": {
                 name: {
                     "name": c.name,
@@ -173,6 +175,89 @@ class ConceptIndex:
             },
             "note_concepts": self.note_concepts,
         }
+
+
+@dataclass
+class ConceptEdge:
+    """An undirected weighted edge between two co-occurring concepts."""
+
+    source: str               # concept name — lexicographically smaller of the pair
+    target: str               # concept name — lexicographically larger of the pair
+    shared_notes: list[str]   # note IDs where both concepts appear (sorted)
+    co_occurrence_count: int  # len(shared_notes) — raw joint frequency
+    weight: float             # Jaccard similarity: count / (sa + sb - count)
+
+
+@dataclass
+class ConceptGraph:
+    """Weighted undirected co-occurrence graph built from a ConceptIndex."""
+
+    version: str = "1.0"
+    generated_at: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+    vault_root: str = ""
+    nodes: list[str] = field(default_factory=list)
+    edges: list[ConceptEdge] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        self._adjacency: dict[str, set[str]] = {}
+        self._edge_index: dict[tuple[str, str], ConceptEdge] = {}
+        for edge in self.edges:
+            self._adjacency.setdefault(edge.source, set()).add(edge.target)
+            self._adjacency.setdefault(edge.target, set()).add(edge.source)
+            self._edge_index[(edge.source, edge.target)] = edge
+
+    def neighbors(self, concept: str) -> set[str]:
+        """Return the set of concepts directly connected to concept."""
+        return self._adjacency.get(concept, set())
+
+    def get_edge(self, a: str, b: str) -> "ConceptEdge | None":
+        """Return the edge between a and b regardless of argument order."""
+        return self._edge_index.get((min(a, b), max(a, b)))
+
+    def degree(self, concept: str) -> int:
+        """Return the number of neighbors of concept."""
+        return len(self._adjacency.get(concept, set()))
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to a JSON-compatible dictionary."""
+        n = len(self.nodes)
+        max_edges = n * (n - 1) / 2
+        density = round(len(self.edges) / max_edges, 6) if max_edges > 0 else 0.0
+        isolated = sum(1 for node in self.nodes if self.degree(node) == 0)
+        return {
+            "version": self.version,
+            "generated_at": self.generated_at,
+            "vault_root": self.vault_root,
+            "stats": {
+                "node_count": n,
+                "edge_count": len(self.edges),
+                "isolated_node_count": isolated,
+                "density": density,
+            },
+            "nodes": self.nodes,
+            "edges": [
+                {
+                    "source": e.source,
+                    "target": e.target,
+                    "co_occurrence_count": e.co_occurrence_count,
+                    "weight": e.weight,
+                    "shared_notes": e.shared_notes,
+                }
+                for e in self.edges
+            ],
+        }
+
+
+def _concept_stats(concepts: dict[str, "Concept"], limit: int) -> dict[str, Any]:
+    by_freq = sorted(concepts.values(), key=lambda c: c.frequency, reverse=True)[:limit]
+    by_src = sorted(concepts.values(), key=lambda c: c.source_count, reverse=True)[:limit]
+    return {
+        "concept_count": len(concepts),
+        "top_by_frequency": [{"name": c.name, "frequency": c.frequency} for c in by_freq],
+        "top_by_source_count": [{"name": c.name, "source_count": c.source_count} for c in by_src],
+    }
 
 
 def _serialize_node(node: GraphNode) -> dict[str, Any]:

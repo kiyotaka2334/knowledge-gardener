@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from knowledge_gardener import __version__
+from knowledge_gardener.concept_extractor import extract_concepts
 from knowledge_gardener.graph_builder import build_graph
 from knowledge_gardener.vault_reader import read_vault
 
@@ -42,6 +43,12 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         metavar="N",
         help="Truncate each note's content to N characters",
+    )
+    parser.add_argument(
+        "--concepts-output",
+        default=None,
+        metavar="PATH",
+        help="Extract concepts and write ConceptIndex JSON to PATH (e.g. output/concepts.json)",
     )
     parser.add_argument(
         "--stats-only",
@@ -99,6 +106,26 @@ def main(argv: list[str] | None = None) -> int:
         recent = stats.recently_modified_notes[0]
         print(f"Last modified:  {recent['path']} ({recent['modified']})")
 
+    if args.concepts_output:
+        try:
+            concept_index = extract_concepts(vault)
+        except Exception:
+            logger.exception("Failed to extract concepts")
+            return 1
+
+        cstats = concept_index.to_dict()["stats"]
+        print(f"\nConcepts:       {cstats['concept_count']}")
+        if cstats["top_by_frequency"]:
+            top_freq = ", ".join(
+                f"{c['name']} ({c['frequency']})" for c in cstats["top_by_frequency"][:5]
+            )
+            print(f"Top by freq:    {top_freq}")
+        if cstats["top_by_source_count"]:
+            top_src = ", ".join(
+                f"{c['name']} ({c['source_count']})" for c in cstats["top_by_source_count"][:5]
+            )
+            print(f"Top by sources: {top_src}")
+
     if args.stats_only:
         return 0
 
@@ -109,6 +136,14 @@ def main(argv: list[str] | None = None) -> int:
         json.dump(graph.to_dict(), f, indent=2, ensure_ascii=False)
 
     print(f"\nKnowledge graph written to {output_path}")
+
+    if args.concepts_output:
+        concepts_path = Path(args.concepts_output)
+        concepts_path.parent.mkdir(parents=True, exist_ok=True)
+        with concepts_path.open("w", encoding="utf-8") as f:
+            json.dump(concept_index.to_dict(), f, indent=2, ensure_ascii=False)
+        print(f"Concepts written to {concepts_path}")
+
     return 0
 
 
