@@ -2,8 +2,8 @@ name: Weekly Vault Analysis
 
 on:
   schedule:
-    # Every Monday at 08:00 UTC
-    - cron: "0 8 * * 1"
+    # Every Sunday at 08:00 UTC
+    - cron: "0 8 * * 0"
   workflow_dispatch:
     inputs:
       vault_url:
@@ -37,26 +37,11 @@ jobs:
       - name: Install knowledge-gardener
         run: pip install -e ".[dev]"
 
-      - name: Determine vault URL
-        id: vault_url
-        run: |
-          INPUT="${{ github.event.inputs.vault_url }}"
-          SECRET="${{ secrets.VAULT_URL }}"
-          if [ -n "$INPUT" ]; then
-            echo "url=$INPUT" >> "$GITHUB_OUTPUT"
-          elif [ -n "$SECRET" ]; then
-            echo "url=$SECRET" >> "$GITHUB_OUTPUT"
-          else
-            echo "url=" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Clone / pull vault
-        env:
-          VAULT_URL: ${{ steps.vault_url.outputs.url }}
         run: |
+          VAULT_URL="${{ github.event.inputs.vault_url }}"
           if [ -z "$VAULT_URL" ]; then
-            echo "No VAULT_URL configured. Add a VAULT_URL repository secret or pass it as a workflow input."
-            exit 1
+            VAULT_URL="https://github.com/kiyotaka2334/obsidian-vault.git"
           fi
           if [ -d vault/.git ]; then
             git -C vault pull
