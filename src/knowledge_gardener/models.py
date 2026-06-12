@@ -128,6 +128,53 @@ class KnowledgeGraph:
         }
 
 
+@dataclass
+class Concept:
+    """A concept extracted from vault notes."""
+
+    name: str
+    sources: list[str] = field(default_factory=list)
+    source_count: int = 0
+    frequency: int = 0
+    origin_types: list[str] = field(default_factory=list)
+    first_seen: str = ""
+    last_seen: str = ""
+
+
+@dataclass
+class ConceptIndex:
+    """All concepts extracted from a vault."""
+
+    version: str = "1.0"
+    generated_at: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+    vault_root: str = ""
+    concepts: dict[str, Concept] = field(default_factory=dict)
+    note_concepts: dict[str, list[str]] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to a JSON-compatible dictionary."""
+        return {
+            "version": self.version,
+            "generated_at": self.generated_at,
+            "vault_root": self.vault_root,
+            "concepts": {
+                name: {
+                    "name": c.name,
+                    "sources": c.sources,
+                    "source_count": c.source_count,
+                    "frequency": c.frequency,
+                    "origin_types": c.origin_types,
+                    "first_seen": c.first_seen,
+                    "last_seen": c.last_seen,
+                }
+                for name, c in self.concepts.items()
+            },
+            "note_concepts": self.note_concepts,
+        }
+
+
 def _serialize_node(node: GraphNode) -> dict[str, Any]:
     if node.type == "note":
         result: dict[str, Any] = {
