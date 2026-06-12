@@ -13,6 +13,8 @@ from knowledge_gardener.concept_clusterer import cluster_concepts
 from knowledge_gardener.concept_extractor import extract_concepts
 from knowledge_gardener.concept_graph import build_concept_graph
 from knowledge_gardener.graph_builder import build_graph
+from knowledge_gardener.insight_engine import analyze as analyze_insights
+from knowledge_gardener.report_writer import write_report
 from knowledge_gardener.vault_reader import read_vault
 
 logger = logging.getLogger(__name__)
@@ -57,6 +59,18 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         metavar="PATH",
         help="Cluster concepts and write ClusterIndex JSON to PATH (implies --concepts-output)",
+    )
+    parser.add_argument(
+        "--insights-output",
+        default=None,
+        metavar="PATH",
+        help="Run insight engine and write InsightReport JSON to PATH (implies --clusters-output)",
+    )
+    parser.add_argument(
+        "--report-output",
+        default=None,
+        metavar="PATH",
+        help="Write human-readable Markdown report to PATH (implies --insights-output)",
     )
     parser.add_argument(
         "--stats-only",
@@ -114,7 +128,7 @@ def main(argv: list[str] | None = None) -> int:
         recent = stats.recently_modified_notes[0]
         print(f"Last modified:  {recent['path']} ({recent['modified']})")
 
-    if args.concepts_output or args.clusters_output:
+    if args.concepts_output or args.clusters_output or args.insights_output or args.report_output:
         try:
             concept_index = extract_concepts(vault)
         except Exception:
@@ -134,7 +148,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             print(f"Top by sources: {top_src}")
 
-    if args.clusters_output:
+    if args.clusters_output or args.insights_output or args.report_output:
         try:
             concept_graph = build_concept_graph(concept_index, vault=vault)
             cluster_index = cluster_concepts(concept_graph)
@@ -148,30 +162,56 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Largest:        {kstats['largest_cluster_size']} concepts")
         print(f"Coverage:       {round(kstats['coverage'] * 100, 1)}% of concepts in a cluster")
 
-    if args.stats_only:
-        return 0
+    if args.insights_output or args.report_output:
+        try:
+            insight_report = analyze_insights(vault, concept_index, concept_graph, cluster_index)
+        except Exception:
+            logger.exception("Failed to run insight engine")
+            return 1
 
-    output_path = Path(args.output)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+        bridge_count = len(insight_report.bridge_concepts)
+        evergreen_count = len(insight_report.evergreen_concepts)
+        print(f"\nInsights:       {len(insight_report.insights)} findings")
+        print(f"Bridge concepts:{bridge_count}")
+        print(f"Evergreen:      {evergreen_count}")
+        print(f"Vault age:      {insight_report.vault_age_days} days")
 
-    with output_path.open("w", encoding="utf-8") as f:
-        json.dump(graph.to_dict(), f, indent=2, ensure_ascii=False)
+    if not args.stats_only:
+        output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with output_path.open("w", encoding="utf-8") as f:
+            json.dump(graph.to_dict(), f, indent=2, ensure_ascii=False)
+        print(f"\nKnowledge graph written to {output_path}")
 
-    print(f"\nKnowledge graph written to {output_path}")
+        if args.concepts_output:
+            concepts_path = Path(args.concepts_output)
+            concepts_path.parent.mkdir(parents=True, exist_ok=True)
+            with concepts_path.open("w", encoding="utf-8") as f:
+                json.dump(concept_index.to_dict(), f, indent=2, ensure_ascii=False)
+            print(f"Concepts written to {concepts_path}")
 
-    if args.concepts_output:
-        concepts_path = Path(args.concepts_output)
-        concepts_path.parent.mkdir(parents=True, exist_ok=True)
-        with concepts_path.open("w", encoding="utf-8") as f:
-            json.dump(concept_index.to_dict(), f, indent=2, ensure_ascii=False)
-        print(f"Concepts written to {concepts_path}")
+        if args.clusters_output:
+            clusters_path = Path(args.clusters_output)
+            clusters_path.parent.mkdir(parents=True, exist_ok=True)
+            with clusters_path.open("w", encoding="utf-8") as f:
+                json.dump(cluster_index.to_dict(), f, indent=2, ensure_ascii=False)
+            print(f"Clusters written to {clusters_path}")
 
-    if args.clusters_output:
-        clusters_path = Path(args.clusters_output)
-        clusters_path.parent.mkdir(parents=True, exist_ok=True)
-        with clusters_path.open("w", encoding="utf-8") as f:
-            json.dump(cluster_index.to_dict(), f, indent=2, ensure_ascii=False)
-        print(f"Clusters written to {clusters_path}")
+        if args.insights_output:
+            insights_path = Path(args.insights_output)
+            insights_path.parent.mkdir(parents=True, exist_ok=True)
+            with insights_path.open("w", encoding="utf-8") as f:
+                json.dump(insight_report.to_dict(), f, indent=2, ensure_ascii=False)
+            print(f"Insights written to {insights_path}")
+
+        if args.report_output:
+            report_md = write_report(
+                vault, concept_index, concept_graph, cluster_index, insight_report
+            )
+            report_path = Path(args.report_output)
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_path.write_text(report_md, encoding="utf-8")
+            print(f"Report written to {report_path}")
 
     return 0
 

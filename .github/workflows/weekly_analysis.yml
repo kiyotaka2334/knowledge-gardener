@@ -1,0 +1,107 @@
+name: Weekly Vault Analysis
+
+on:
+  schedule:
+    # Every Monday at 08:00 UTC
+    - cron: "0 8 * * 1"
+  workflow_dispatch:
+    inputs:
+      vault_url:
+        description: "Override vault git URL (leave blank to use VAULT_URL secret)"
+        required: false
+        default: ""
+      snapshot_date:
+        description: "Override snapshot date (YYYY-MM-DD, leave blank for today)"
+        required: false
+        default: ""
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # needed to push snapshots back to this repo
+
+    steps:
+      - name: Check out knowledge-gardener
+        uses: actions/checkout@v4
+        with:
+          # Fetch full history so git commit works
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install knowledge-gardener
+        run: pip install -e ".[dev]"
+
+      - name: Determine vault URL
+        id: vault_url
+        run: |
+          INPUT="${{ github.event.inputs.vault_url }}"
+          SECRET="${{ secrets.VAULT_URL }}"
+          if [ -n "$INPUT" ]; then
+            echo "url=$INPUT" >> "$GITHUB_OUTPUT"
+          elif [ -n "$SECRET" ]; then
+            echo "url=$SECRET" >> "$GITHUB_OUTPUT"
+          else
+            echo "url=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Clone / pull vault
+        env:
+          VAULT_URL: ${{ steps.vault_url.outputs.url }}
+        run: |
+          if [ -z "$VAULT_URL" ]; then
+            echo "No VAULT_URL configured. Add a VAULT_URL repository secret or pass it as a workflow input."
+            exit 1
+          fi
+          if [ -d vault/.git ]; then
+            git -C vault pull
+          else
+            git clone "$VAULT_URL" vault
+          fi
+
+      - name: Restore snapshots cache
+        uses: actions/cache@v4
+        with:
+          path: snapshots/
+          key: snapshots-${{ github.run_id }}
+          restore-keys: |
+            snapshots-
+
+      - name: Run weekly analysis
+        run: |
+          EXTRA_ARGS=""
+          if [ -n "${{ github.event.inputs.snapshot_date }}" ]; then
+            EXTRA_ARGS="--snapshot-date ${{ github.event.inputs.snapshot_date }}"
+          fi
+          python scripts/weekly_run.py \
+            --vault vault \
+            --snapshots-dir snapshots \
+            --no-pull \
+            $EXTRA_ARGS
+
+      - name: Commit and push snapshots
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add snapshots/
+          if git diff --cached --quiet; then
+            echo "No snapshot changes to commit."
+          else
+            DATE=$(date -u +%Y-%m-%d)
+            git commit -m "chore: weekly snapshot $DATE [skip ci]"
+            git push
+          fi
+
+      - name: Upload reports as artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-reports-${{ github.run_number }}
+          path: |
+            snapshots/**/report.md
+            snapshots/**/weekly_diff.md
+          retention-days: 90

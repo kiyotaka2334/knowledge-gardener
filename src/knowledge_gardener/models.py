@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -311,6 +312,138 @@ class ClusterIndex:
                 for c in self.clusters
             ],
             "node_cluster": self.node_cluster,
+        }
+
+
+@dataclass
+class BridgeConcept:
+    """A concept that connects two or more distinct clusters."""
+
+    concept: str
+    home_cluster_id: str
+    bridged_cluster_ids: list[str]        # other clusters this concept connects to
+    bridge_score: float                    # external_weight / (internal_weight + external_weight)
+    internal_weight: float
+    external_weight: float
+    bridge_breadth: int                    # len(bridged_cluster_ids)
+    top_bridge_edges: list[dict]           # top-3: [{concept, cluster_id, edge_weight}]
+
+
+@dataclass
+class EvergreenConcept:
+    """A concept that appears broadly and persists over time."""
+
+    concept: str
+    cluster_id: str
+    source_count: int
+    first_seen: str
+    last_seen: str
+    longevity_days: int
+    days_since_last_seen: int
+    breadth: float                         # source_count / total_notes
+    longevity_norm: float                  # longevity_days / vault_age_days
+    recency_norm: float                    # 1.0 if recent; decays otherwise
+    evergreen_score: float                 # 0.4*breadth + 0.4*longevity_norm + 0.2*recency_norm
+
+
+@dataclass
+class ConceptTrend:
+    """Trend classification for a concept based on temporal activity."""
+
+    concept: str
+    cluster_id: str
+    label: str                             # emerging/rising/stable/declining/dormant/insufficient data
+    recent_count: int
+    historical_count: int
+    trend_ratio: float                     # recent_count / max(historical_count, 1)
+    trend_confidence: float                # min(source_count, 10) / 10
+    first_seen: str
+    last_seen: str
+    days_since_last_seen: int
+
+
+@dataclass
+class ClusterSummary:
+    """Aggregate analysis of a single concept cluster."""
+
+    cluster_id: str
+    label: str
+    size: int
+    internal_density: float
+    external_edge_count: int
+    isolation_score: float                 # 1 - external_edges/total_edges_touching_cluster
+    bridge_member_count: int
+    hub_concentration: float               # centroid_degree / (2 * internal_edge_count)
+    dominant_trend: str
+    centroid_trend: str
+
+
+@dataclass
+class NarrativeEvent:
+    """A single period statement in the vault's knowledge timeline."""
+
+    period_label: str
+    period_start: str
+    period_end: str
+    statement_type: str                    # vault_origin/cluster_dominance/current_focus/insufficient_temporal_data
+    statement: str
+    dominant_cluster_id: str | None
+    new_concept_count: int
+    supporting_signals: dict[str, Any]
+
+
+@dataclass
+class Insight:
+    """A single ranked, typed finding from the insight engine."""
+
+    id: str                                # sha256[:8] of "category:headline"
+    category: str                          # bridge/evergreen/emerging/declining/cluster/narrative
+    headline: str
+    explanation: str
+    concepts: list[str]
+    clusters: list[str]
+    confidence: float
+    supporting_signals: dict[str, Any]
+    rank: float
+
+
+@dataclass
+class InsightReport:
+    """Full output of the insight engine for one vault analysis run."""
+
+    version: str = "1.0"
+    generated_at: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+    vault_root: str = ""
+    vault_age_days: int = 0
+    total_notes: int = 0
+    total_concepts: int = 0
+    total_clusters: int = 0
+    recent_window_days: int = 90
+    bridge_concepts: list[BridgeConcept] = field(default_factory=list)
+    evergreen_concepts: list[EvergreenConcept] = field(default_factory=list)
+    concept_trends: list[ConceptTrend] = field(default_factory=list)
+    cluster_summaries: list[ClusterSummary] = field(default_factory=list)
+    narrative: list[NarrativeEvent] = field(default_factory=list)
+    insights: list[Insight] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "version": self.version,
+            "generated_at": self.generated_at,
+            "vault_root": self.vault_root,
+            "vault_age_days": self.vault_age_days,
+            "total_notes": self.total_notes,
+            "total_concepts": self.total_concepts,
+            "total_clusters": self.total_clusters,
+            "recent_window_days": self.recent_window_days,
+            "bridge_concepts": [dataclasses.asdict(b) for b in self.bridge_concepts],
+            "evergreen_concepts": [dataclasses.asdict(e) for e in self.evergreen_concepts],
+            "concept_trends": [dataclasses.asdict(t) for t in self.concept_trends],
+            "cluster_summaries": [dataclasses.asdict(c) for c in self.cluster_summaries],
+            "narrative": [dataclasses.asdict(n) for n in self.narrative],
+            "insights": [dataclasses.asdict(i) for i in self.insights],
         }
 
 
