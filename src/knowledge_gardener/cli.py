@@ -9,7 +9,9 @@ import sys
 from pathlib import Path
 
 from knowledge_gardener import __version__
+from knowledge_gardener.concept_clusterer import cluster_concepts
 from knowledge_gardener.concept_extractor import extract_concepts
+from knowledge_gardener.concept_graph import build_concept_graph
 from knowledge_gardener.graph_builder import build_graph
 from knowledge_gardener.vault_reader import read_vault
 
@@ -49,6 +51,12 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         metavar="PATH",
         help="Extract concepts and write ConceptIndex JSON to PATH (e.g. output/concepts.json)",
+    )
+    parser.add_argument(
+        "--clusters-output",
+        default=None,
+        metavar="PATH",
+        help="Cluster concepts and write ClusterIndex JSON to PATH (implies --concepts-output)",
     )
     parser.add_argument(
         "--stats-only",
@@ -106,7 +114,7 @@ def main(argv: list[str] | None = None) -> int:
         recent = stats.recently_modified_notes[0]
         print(f"Last modified:  {recent['path']} ({recent['modified']})")
 
-    if args.concepts_output:
+    if args.concepts_output or args.clusters_output:
         try:
             concept_index = extract_concepts(vault)
         except Exception:
@@ -126,6 +134,20 @@ def main(argv: list[str] | None = None) -> int:
             )
             print(f"Top by sources: {top_src}")
 
+    if args.clusters_output:
+        try:
+            concept_graph = build_concept_graph(concept_index, vault=vault)
+            cluster_index = cluster_concepts(concept_graph)
+        except Exception:
+            logger.exception("Failed to cluster concepts")
+            return 1
+
+        kstats = cluster_index.stats
+        print(f"\nClusters:       {kstats['cluster_count']} "
+              f"({kstats['singleton_count']} singletons)")
+        print(f"Largest:        {kstats['largest_cluster_size']} concepts")
+        print(f"Coverage:       {round(kstats['coverage'] * 100, 1)}% of concepts in a cluster")
+
     if args.stats_only:
         return 0
 
@@ -143,6 +165,13 @@ def main(argv: list[str] | None = None) -> int:
         with concepts_path.open("w", encoding="utf-8") as f:
             json.dump(concept_index.to_dict(), f, indent=2, ensure_ascii=False)
         print(f"Concepts written to {concepts_path}")
+
+    if args.clusters_output:
+        clusters_path = Path(args.clusters_output)
+        clusters_path.parent.mkdir(parents=True, exist_ok=True)
+        with clusters_path.open("w", encoding="utf-8") as f:
+            json.dump(cluster_index.to_dict(), f, indent=2, ensure_ascii=False)
+        print(f"Clusters written to {clusters_path}")
 
     return 0
 

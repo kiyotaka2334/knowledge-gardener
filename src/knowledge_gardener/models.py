@@ -261,6 +261,59 @@ class ConceptGraph:
         }
 
 
+@dataclass
+class ConceptCluster:
+    """A community of related concepts identified by label propagation."""
+
+    id: str                       # "cluster-00" (non-singletons) or "singleton-{name}"
+    label: str                    # centroid concept name — human-readable cluster name
+    members: list[str]            # concept names, sorted alphabetically
+    size: int                     # len(members)
+    centroid: str                 # member with highest internal degree; tie-break: alphabetical
+    internal_edge_count: int      # edges where both endpoints are in this cluster
+    internal_density: float       # internal_edges / (size*(size-1)/2); 0.0 if size < 2
+    top_connections: list[str]    # centroid's top-3 most-strongly-connected cluster-mates
+
+
+@dataclass
+class ClusterIndex:
+    """Concept communities identified within a ConceptGraph."""
+
+    version: str = "1.0"
+    generated_at: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+    vault_root: str = ""
+    algorithm: str = "label_propagation_weighted_v1"
+    clusters: list[ConceptCluster] = field(default_factory=list)
+    node_cluster: dict[str, str] = field(default_factory=dict)
+    stats: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to a JSON-compatible dictionary."""
+        return {
+            "version": self.version,
+            "generated_at": self.generated_at,
+            "vault_root": self.vault_root,
+            "algorithm": self.algorithm,
+            "stats": self.stats,
+            "clusters": [
+                {
+                    "id": c.id,
+                    "label": c.label,
+                    "members": c.members,
+                    "size": c.size,
+                    "centroid": c.centroid,
+                    "internal_edge_count": c.internal_edge_count,
+                    "internal_density": c.internal_density,
+                    "top_connections": c.top_connections,
+                }
+                for c in self.clusters
+            ],
+            "node_cluster": self.node_cluster,
+        }
+
+
 def _concept_stats(concepts: dict[str, "Concept"], limit: int) -> dict[str, Any]:
     by_freq = sorted(concepts.values(), key=lambda c: c.frequency, reverse=True)[:limit]
     by_src = sorted(concepts.values(), key=lambda c: c.source_count, reverse=True)[:limit]
