@@ -20,7 +20,7 @@ from knowledge_gardener.models import ClusterIndex, ConceptCluster, InsightRepor
 logger = logging.getLogger(__name__)
 
 ENRICHMENT_SCHEMA_VERSION = 1
-DEFAULT_MODEL = "gemini-2.0-flash"
+DEFAULT_MODEL = "gemini-2.5-flash"
 MAX_CLUSTERS_IN_PAYLOAD = 15  # cap payload size for large vaults
 
 
