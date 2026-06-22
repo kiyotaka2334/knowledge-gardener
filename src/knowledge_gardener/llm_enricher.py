@@ -216,9 +216,9 @@ def enrich(
 
     try:
         from google import genai  # type: ignore[import]
-    except ImportError:
+    except Exception:
         logger.warning(
-            "google-genai not installed; skipping LLM enrichment. "
+            "google-genai not available; skipping LLM enrichment. "
             "Run: pip install 'knowledge-gardener[llm]'"
         )
         return None
