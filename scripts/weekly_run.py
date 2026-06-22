@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -183,23 +184,77 @@ def main(argv: list[str] | None = None) -> int:
         except FileNotFoundError:
             logger.warning("Could not load previous snapshot (%s)", prev_date)
 
-    # ── Step 4: Build and save new snapshot ─────────────────────────────────
+    # ── Step 4: Build new snapshot (in memory) ──────────────────────────────
     snapshot = take_snapshot(index, clusters, report, vault_root=vault_path)
     if args.snapshot_date:
         snapshot["snapshot_date"] = args.snapshot_date
+
+    # ── Step 5: Compute weekly diff (if previous snapshot exists) ────────────
+    diff = None
+    diff_data: dict | None = None
+    if prev_snapshot:
+        diff = diff_snapshots(prev_snapshot, snapshot)
+        try:
+            diff_data = {
+                "note_delta": diff.note_delta,
+                "concept_delta": diff.concept_delta,
+                "new_concepts": sorted(diff.concept_diff.new)[:15],
+                "removed_concepts": sorted(diff.concept_diff.removed)[:10],
+            }
+        except AttributeError:
+            pass
+
+    # ── Step 6: LLM enrichment (optional — skipped if no GEMINI_API_KEY) ────
+    enrichment = None
+    if os.environ.get("GEMINI_API_KEY"):
+        from knowledge_gardener.llm_enricher import (
+            build_payload,
+            enrich,
+            enrichment_from_snapshot,
+            enrichment_meta_dict,
+            enrichment_to_dict,
+            payload_hash,
+        )
+
+        # Compute hash of the structural payload (no diff — diff changes every week)
+        current_payload = build_payload(report, clusters)
+        current_hash = payload_hash(current_payload)
+
+        # Use cached enrichment if vault structure hasn't changed since last run
+        if prev_snapshot:
+            prev_meta = prev_snapshot.get("llm_enrichment_meta", {})
+            if (
+                prev_meta.get("payload_hash") == current_hash
+                and "llm_enrichment" in prev_snapshot
+            ):
+                logger.info("Vault structure unchanged — reusing cached LLM enrichment")
+                enrichment = enrichment_from_snapshot(
+                    prev_snapshot["llm_enrichment"],
+                    prev_meta,
+                )
+
+        if enrichment is None:
+            enrichment = enrich(report, clusters, diff_data=diff_data)
+
+        if enrichment is not None:
+            # Embed enrichment + context into the snapshot dict before saving
+            snapshot["llm_enrichment"] = enrichment_to_dict(enrichment)
+            snapshot["llm_enrichment_meta"] = enrichment_meta_dict(enrichment)
+            snapshot["llm_context"] = current_payload  # preserves what Gemini was shown
+
+    # ── Step 7: Save snapshot to disk ───────────────────────────────────────
     snap_path = save_snapshot(snapshot, snapshots_dir, snapshot["snapshot_date"])
     snap_dir = snap_path.parent
     logger.info("Snapshot saved: %s", snap_path)
 
-    # ── Step 5: Human-readable vault report ─────────────────────────────────
-    report_md = write_report(vault, index, graph, clusters, report)
+    # ── Step 8: Human-readable vault report ─────────────────────────────────
+    report_md = write_report(vault, index, graph, clusters, report, enrichment=enrichment)
     report_path = snap_dir / "report.md"
     report_path.write_text(report_md, encoding="utf-8")
     logger.info("Vault report written: %s", report_path)
 
-    # ── Step 6: Weekly diff report (requires a previous snapshot) ───────────
-    if prev_snapshot:
-        diff = diff_snapshots(prev_snapshot, snapshot)
+    # ── Step 9: Weekly diff report (requires a previous snapshot) ────────────
+    if diff is not None and prev_snapshot:
         weekly_md = write_weekly_report(diff, snapshot)
         weekly_path = snap_dir / "weekly_diff.md"
         weekly_path.write_text(weekly_md, encoding="utf-8")

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from knowledge_gardener.models import (
     ClusterIndex,
@@ -17,6 +18,9 @@ from knowledge_gardener.models import (
     VaultModel,
 )
 
+if TYPE_CHECKING:
+    from knowledge_gardener.llm_enricher import LLMEnrichment
+
 
 def write_report(
     vault: VaultModel,
@@ -24,6 +28,7 @@ def write_report(
     graph: ConceptGraph,
     clusters: ClusterIndex,
     report: InsightReport,
+    enrichment: "LLMEnrichment | None" = None,
 ) -> str:
     """Generate a human-readable Markdown report from all analysis outputs.
 
@@ -41,6 +46,8 @@ def write_report(
     _section_bridges(lines, ctx)
     _section_activity(lines, ctx)
     _section_narrative(lines, ctx)
+    if enrichment is not None:
+        _section_llm_insights(lines, ctx, enrichment)
     _section_footer(lines, ctx)
 
     return "\n".join(lines)
@@ -347,6 +354,70 @@ def _section_narrative(lines: list[str], ctx: _ReportContext) -> None:
     for event in narrative_events:
         lines.append(f"- {event.statement}")
     lines += ["", "---", ""]
+
+
+def _section_llm_insights(
+    lines: list[str],
+    ctx: _ReportContext,
+    enrichment: "LLMEnrichment",
+) -> None:
+    from knowledge_gardener.llm_enricher import LLMEnrichment  # noqa: F401 (type narrowing)
+
+    lines += [
+        "## Deeper Insights",
+        "",
+        f"*Powered by {enrichment.model}*",
+        "",
+    ]
+
+    # Per-cluster descriptions with optional confidence badge
+    if enrichment.cluster_descriptions:
+        lines += ["### Your Themes, Described", ""]
+        for cluster in ctx.non_singletons:
+            desc = enrichment.cluster_descriptions.get(cluster.id)
+            if not desc:
+                continue
+            confidence = enrichment.cluster_confidence.get(cluster.id, 1.0)
+            name = _format_cluster_name(cluster.centroid)
+            conf_tag = ""
+            if confidence < 0.5:
+                conf_tag = " *(low confidence)*"
+            elif confidence < 0.75:
+                conf_tag = " *(medium confidence)*"
+            lines += [f"**{name}**{conf_tag}", desc, ""]
+
+    # Structured cross-cluster connections
+    if enrichment.connections:
+        lines += ["### Connections Between Themes", ""]
+        for conn in enrichment.connections:
+            label_a = _cluster_label_for(conn.cluster_a, ctx.clusters)
+            label_b = _cluster_label_for(conn.cluster_b, ctx.clusters)
+            conf = conn.confidence
+            conf_note = "" if conf >= 0.75 else " *(tentative)*"
+            lines += [
+                f"**{_format_cluster_name(label_a)} ↔ {_format_cluster_name(label_b)}**"
+                f"{conf_note}",
+                conn.reason,
+                "",
+            ]
+
+    # Weekly narrative (only when a diff was provided)
+    if enrichment.weekly_narrative:
+        lines += [
+            "### This Week in Your Vault",
+            "",
+            enrichment.weekly_narrative,
+            "",
+        ]
+
+    # Reflective questions
+    if enrichment.questions:
+        lines += ["### Questions Worth Sitting With", ""]
+        for q in enrichment.questions:
+            lines.append(f"- {q}")
+        lines.append("")
+
+    lines += ["---", ""]
 
 
 def _section_footer(lines: list[str], ctx: _ReportContext) -> None:

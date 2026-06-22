@@ -35,7 +35,7 @@ jobs:
           cache: pip
 
       - name: Install knowledge-gardener
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[dev,llm]"
 
       - name: Clone / pull vault
         env:
@@ -67,6 +67,10 @@ jobs:
             snapshots-
 
       - name: Run weekly analysis
+        env:
+          # Optional: set GEMINI_API_KEY secret to enable LLM-powered insights.
+          # If absent, the workflow runs as before with statistical reports only.
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           EXTRA_ARGS=""
           if [ -n "${{ github.event.inputs.snapshot_date }}" ]; then
