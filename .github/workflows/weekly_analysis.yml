@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       vault_url:
-        description: "Override vault git URL (leave blank to use VAULT_URL secret)"
+        description: "Override vault git URL (leave blank to use default)"
         required: false
         default: ""
       snapshot_date:
@@ -38,11 +38,20 @@ jobs:
         run: pip install -e ".[dev]"
 
       - name: Clone / pull vault
+        env:
+          # Set VAULT_TOKEN to a PAT with read access to the vault repo.
+          # GITHUB_TOKEN is used as a fallback (works if vault is public or
+          # if the Actions token is granted cross-repo access).
+          VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           VAULT_URL="${{ github.event.inputs.vault_url }}"
           if [ -z "$VAULT_URL" ]; then
             VAULT_URL="https://github.com/kiyotaka2334/obsidian-vault.git"
           fi
+          # Inject credentials via git URL rewriting (keeps the clone URL clean)
+          TOKEN="${VAULT_TOKEN:-$GH_TOKEN}"
+          git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"
           if [ -d vault/.git ]; then
             git -C vault pull
           else
