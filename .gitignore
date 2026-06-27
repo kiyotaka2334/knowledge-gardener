@@ -10,3 +10,4 @@ build/
 venv/
 output/
 *.json
+!.mcp.json
